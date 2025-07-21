@@ -147,6 +147,29 @@ class ECRExtractor:
         # If no pattern matches, return as-is
         return player_name_col.strip(), ""
     
+    def clean_position_field(self, position_value: str) -> str:
+        """
+        Extract clean position code from mixed position field
+        
+        Args:
+            position_value: Raw position value (may contain position + rank like "QB1")
+            
+        Returns:
+            Clean position code (e.g., "QB", "RB", "WR", "TE", "K", "DST")
+        """
+        if pd.isna(position_value) or not isinstance(position_value, str):
+            return ""
+        
+        position_str = str(position_value).strip()
+        
+        # Extract base position using regex - match position code at the beginning
+        position_match = re.match(r'^(QB|RB|WR|TE|K|DST)', position_str, re.IGNORECASE)
+        if position_match:
+            return position_match.group(1).upper()
+        
+        # If no standard position found, return the original value
+        return position_str
+    
     def calculate_adp_from_vs_adp(self, rank: int, vs_adp: float) -> Optional[float]:
         """
         Calculate ADP from rank and vs_adp difference
@@ -243,7 +266,8 @@ class ECRExtractor:
                 
                 # Try to get position from dedicated position column first
                 if 'position' in df.columns:
-                    result_df['position'] = df['position'].fillna("")
+                    # Clean position field to extract only the position code
+                    result_df['position'] = df['position'].apply(self.clean_position_field)
                 else:
                     # Extract from player name if no dedicated position column
                     result_df['position'] = [info[1] for info in player_info]
@@ -280,6 +304,9 @@ class ECRExtractor:
             else:
                 result_df['adp'] = None
                 result_df['vs_adp'] = None
+            
+            # Calculate position_rank based on overall rank within each position
+            result_df['position_rank'] = result_df.groupby('position')['rank'].rank(method='dense').astype('Int64')
             
             # Filter out rows with empty player names (but be more lenient)
             if len(result_df) > 0:
@@ -434,3 +461,162 @@ class ECRExtractor:
         except Exception as e:
             logger.error(f"Error verifying ECR data: {e}")
             return {'error': str(e)}
+    
+    def create_ecr_rankings_with_player_ids(self) -> Dict[str, Any]:
+        """
+        Create ecr_rankings table with player_id column by matching to rosters table
+        
+        Returns:
+            Dictionary with processing results
+        """
+        logger.info("Creating ecr_rankings table with player_id matching")
+        
+        try:
+            # Drop existing table if it exists
+            logger.info("Dropping existing ecr_rankings table if exists")
+            self.db.conn.execute("DROP TABLE IF EXISTS ecr_rankings")
+            
+            # Create the new table with player_id matching
+            logger.info("Creating ecr_rankings table with player_id joins")
+            
+            create_query = """
+            CREATE TABLE ecr_rankings AS
+            WITH player_matches AS (
+                -- First attempt: exact name and position match
+                SELECT DISTINCT
+                    ecr.*,
+                    r.player_id,
+                    'exact_match' as match_type
+                FROM raw_ecr_rankings ecr
+                INNER JOIN rosters r ON 
+                    LOWER(TRIM(ecr.player_name)) = LOWER(TRIM(r.player_name))
+                    AND UPPER(TRIM(ecr.position)) = UPPER(TRIM(r.position))
+                
+                UNION ALL
+                
+                -- Second attempt: partial name match for cases like "A.J. Green" vs "AJ Green"
+                SELECT DISTINCT
+                    ecr.*,
+                    r.player_id,
+                    'partial_match' as match_type
+                FROM raw_ecr_rankings ecr
+                INNER JOIN rosters r ON 
+                    UPPER(TRIM(ecr.position)) = UPPER(TRIM(r.position))
+                    AND (
+                        -- Remove periods and spaces for comparison
+                        REPLACE(REPLACE(LOWER(TRIM(ecr.player_name)), '.', ''), ' ', '') = 
+                        REPLACE(REPLACE(LOWER(TRIM(r.player_name)), '.', ''), ' ', '')
+                        OR
+                        -- Check if one name contains the other (for nicknames)
+                        LOWER(TRIM(ecr.player_name)) LIKE '%' || LOWER(TRIM(r.player_name)) || '%'
+                        OR
+                        LOWER(TRIM(r.player_name)) LIKE '%' || LOWER(TRIM(ecr.player_name)) || '%'
+                    )
+                WHERE NOT EXISTS (
+                    -- Exclude if already matched exactly
+                    SELECT 1 FROM rosters r2 
+                    WHERE LOWER(TRIM(ecr.player_name)) = LOWER(TRIM(r2.player_name))
+                    AND UPPER(TRIM(ecr.position)) = UPPER(TRIM(r2.position))
+                )
+            ),
+            
+            -- Deduplicate matches, preferring exact matches over partial
+            deduped_matches AS (
+                SELECT *
+                FROM (
+                    SELECT *,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY year, before_preseason, player_name, position, rank 
+                               ORDER BY 
+                                   CASE WHEN match_type = 'exact_match' THEN 1 ELSE 2 END,
+                                   player_id
+                           ) as rn
+                    FROM player_matches
+                ) ranked
+                WHERE rn = 1
+            )
+            
+            SELECT 
+                year,
+                before_preseason,
+                player_name,
+                position,
+                rank,
+                best_rank,
+                worst_rank,
+                avg_rank,
+                stddev_rank,
+                adp,
+                vs_adp,
+                position_rank,
+                player_id,
+                created_at,
+                updated_at
+            FROM deduped_matches
+            ORDER BY year, before_preseason, rank
+            """
+            
+            self.db.conn.execute(create_query)
+            
+            # Verify the results
+            total_raw = self.db.query("SELECT COUNT(*) as count FROM raw_ecr_rankings").iloc[0]['count']
+            total_matched = self.db.query("SELECT COUNT(*) as count FROM ecr_rankings").iloc[0]['count']
+            
+            # Check for unmatched records
+            unmatched_query = """
+            SELECT DISTINCT 
+                ecr.player_name,
+                ecr.position,
+                COUNT(*) as occurrence_count
+            FROM raw_ecr_rankings ecr
+            LEFT JOIN ecr_rankings er ON 
+                ecr.year = er.year 
+                AND ecr.before_preseason = er.before_preseason
+                AND ecr.player_name = er.player_name
+                AND ecr.position = er.position
+                AND ecr.rank = er.rank
+            WHERE er.player_id IS NULL
+            GROUP BY ecr.player_name, ecr.position
+            ORDER BY occurrence_count DESC
+            LIMIT 20
+            """
+            
+            unmatched_players = self.db.query(unmatched_query)
+            
+            # Get match type statistics
+            match_stats = self.db.query("""
+            WITH match_analysis AS (
+                SELECT 
+                    ecr.*,
+                    CASE 
+                        WHEN EXISTS (
+                            SELECT 1 FROM rosters r 
+                            WHERE LOWER(TRIM(ecr.player_name)) = LOWER(TRIM(r.player_name))
+                            AND UPPER(TRIM(ecr.position)) = UPPER(TRIM(r.position))
+                        ) THEN 'exact_match'
+                        ELSE 'partial_match'
+                    END as match_type
+                FROM ecr_rankings ecr
+            )
+            SELECT 
+                match_type,
+                COUNT(*) as count
+            FROM match_analysis
+            GROUP BY match_type
+            """)
+            
+            results = {
+                'total_raw_records': int(total_raw),
+                'total_matched_records': int(total_matched),
+                'match_rate': round((total_matched / total_raw) * 100, 2),
+                'unmatched_count': int(total_raw - total_matched),
+                'match_statistics': match_stats.to_dict('records'),
+                'sample_unmatched_players': unmatched_players.to_dict('records') if len(unmatched_players) > 0 else []
+            }
+            
+            logger.info(f"ECR rankings with player IDs created: {results}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Failed to create ecr_rankings with player IDs: {e}")
+            raise
