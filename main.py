@@ -14,6 +14,7 @@ from nfl_analytics.database.manager import DatabaseManager
 from nfl_analytics.extractors.data_extractor import NFLDataExtractor
 from nfl_analytics.extractors.ecr_extractor import ECRExtractor
 from nfl_analytics.models.fantasy_points import FantasyPointsCalculator
+from summarizers import create_smry_season_table, run_all_tests
 
 # Configure logging
 logging.basicConfig(
@@ -248,6 +249,80 @@ def refresh_raw_ecr(args):
         sys.exit(1)
 
 
+def refresh_summary_tables(args):
+    """Refresh all summary (smry_) tables"""
+    try:
+        logger.info("Starting summary tables refresh")
+        
+        # Dictionary to track summary table functions
+        summary_functions = {
+            'smry_season': create_smry_season_table
+        }
+        
+        # Dictionary to track results
+        results = {}
+        
+        print("\n=== Summary Tables Refresh ===")
+        
+        # Create each summary table
+        for table_name, create_func in summary_functions.items():
+            logger.info(f"Creating {table_name} table...")
+            print(f"Creating {table_name}...")
+            
+            try:
+                create_func(args.database)
+                
+                # Get record count
+                with DatabaseManager(args.database) as db:
+                    count_result = db.query(f"SELECT COUNT(*) as count FROM {table_name}")
+                    record_count = count_result.iloc[0]['count']
+                    results[table_name] = record_count
+                    print(f"  ✅ {table_name}: {record_count:,} records")
+                    
+            except Exception as e:
+                logger.error(f"Failed to create {table_name}: {e}")
+                print(f"  ❌ {table_name}: Failed - {e}")
+                results[table_name] = 0
+        
+        # Run tests if requested
+        if args.run_tests:
+            print("\n=== Running Tests ===")
+            test_results = run_all_tests(args.database)
+            
+            passed = sum(test_results.values())
+            total = len(test_results)
+            
+            print(f"\nTest Summary: {passed}/{total} tests passed")
+            
+            if passed != total:
+                logger.warning(f"Some tests failed: {passed}/{total} passed")
+            else:
+                logger.info("All tests passed successfully")
+        
+        # Summary
+        print(f"\n=== Summary Tables Refresh Complete ===")
+        total_records = sum(results.values())
+        successful_tables = len([v for v in results.values() if v > 0])
+        total_tables = len(results)
+        
+        print(f"Tables created: {successful_tables}/{total_tables}")
+        print(f"Total records: {total_records:,}")
+        
+        for table_name, count in results.items():
+            status = "✅" if count > 0 else "❌"
+            print(f"  {status} {table_name}: {count:,} records")
+        
+        if successful_tables != total_tables:
+            logger.error(f"Some summary tables failed to create: {successful_tables}/{total_tables}")
+            sys.exit(1)
+        
+        logger.info("Summary tables refresh completed successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to refresh summary tables: {e}")
+        sys.exit(1)
+
+
 
 
 
@@ -261,6 +336,7 @@ Examples:
   %(prog)s extract --seasons 2022 2023 2024 --database nfl.duckdb
   %(prog)s refresh-season --season 2024 --database nfl.duckdb
   %(prog)s refresh-raw-ecr --database nfl.duckdb
+  %(prog)s refresh-summary --database nfl.duckdb --run-tests
   %(prog)s validate --database nfl.duckdb
   %(prog)s schema --database nfl.duckdb
   %(prog)s query --sql "SELECT * FROM weekly_stats WHERE season = 2024 LIMIT 10" --database nfl.duckdb
@@ -269,8 +345,8 @@ Examples:
     
     parser.add_argument(
         '--database', '-d',
-        default='nfl_analytics.duckdb',
-        help='Path to DuckDB database file (default: nfl_analytics.duckdb)'
+        default='prod_nfl.duckdb',
+        help='Path to DuckDB database file (default: prod_nfl.duckdb)'
     )
     
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
@@ -303,6 +379,14 @@ Examples:
     # Refresh ECR command
     refresh_ecr_parser = subparsers.add_parser('refresh-raw-ecr', help='Refresh Expert Consensus Rankings data')
     refresh_ecr_parser.set_defaults(func=refresh_raw_ecr)
+    
+    # Refresh summary tables command
+    refresh_summary_parser = subparsers.add_parser('refresh-summary', help='Refresh all summary (smry_) tables')
+    refresh_summary_parser.add_argument(
+        '--run-tests', action='store_true',
+        help='Run validation tests after creating summary tables'
+    )
+    refresh_summary_parser.set_defaults(func=refresh_summary_tables)
     
     # Validate command
     validate_parser = subparsers.add_parser('validate', help='Validate database data quality')
