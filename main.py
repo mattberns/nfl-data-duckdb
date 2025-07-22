@@ -249,6 +249,49 @@ def refresh_raw_ecr(args):
         sys.exit(1)
 
 
+def refresh_transformed_ecr(args):
+    """Transform raw ECR data into ECR rankings with player IDs"""
+    try:
+        logger.info("Starting ECR transformation with player ID matching")
+        
+        with DatabaseManager(args.database) as db:
+            # Create ECR extractor
+            ecr_extractor = ECRExtractor(db)
+            
+            # Transform the data
+            results = ecr_extractor.create_ecr_rankings_with_player_ids()
+            
+            if 'error' in results:
+                print(f"Error: {results['error']}")
+                sys.exit(1)
+            
+            print("\n=== ECR Transformation Results ===")
+            print(f"Total records processed: {results.get('total_records', 0):,}")
+            print(f"Successfully matched: {results.get('matched_records', 0):,}")
+            print(f"Unmatched records: {results.get('unmatched_records', 0):,}")
+            
+            # Display match statistics if available
+            if 'match_stats' in results:
+                stats = results['match_stats']
+                print(f"\n=== Match Statistics ===")
+                print(f"Exact matches: {stats.get('exact_matches', 0):,}")
+                print(f"Partial matches: {stats.get('partial_matches', 0):,}")
+                print(f"No matches: {stats.get('no_matches', 0):,}")
+            
+            # Display verification results if available
+            if 'verification' in results:
+                verification = results['verification']
+                print(f"\n=== Data Verification ===")
+                print(f"Final table records: {verification.get('final_count', 0):,}")
+                print(f"Duplicate records removed: {verification.get('duplicates_removed', 0):,}")
+            
+        logger.info("ECR transformation completed successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to transform ECR data: {e}")
+        sys.exit(1)
+
+
 def refresh_summary_tables(args):
     """Refresh all summary (smry_) tables"""
     try:
@@ -336,6 +379,7 @@ Examples:
   %(prog)s extract --seasons 2022 2023 2024 --database nfl.duckdb
   %(prog)s refresh-season --season 2024 --database nfl.duckdb
   %(prog)s refresh-raw-ecr --database nfl.duckdb
+  %(prog)s refresh-transformed-ecr --database nfl.duckdb
   %(prog)s refresh-summary --database nfl.duckdb --run-tests
   %(prog)s validate --database nfl.duckdb
   %(prog)s schema --database nfl.duckdb
@@ -379,6 +423,10 @@ Examples:
     # Refresh ECR command
     refresh_ecr_parser = subparsers.add_parser('refresh-raw-ecr', help='Refresh Expert Consensus Rankings data')
     refresh_ecr_parser.set_defaults(func=refresh_raw_ecr)
+    
+    # Refresh transformed ECR command
+    refresh_transformed_ecr_parser = subparsers.add_parser('refresh-transformed-ecr', help='Transform raw ECR data into ECR rankings with player IDs')
+    refresh_transformed_ecr_parser.set_defaults(func=refresh_transformed_ecr)
     
     # Refresh summary tables command
     refresh_summary_parser = subparsers.add_parser('refresh-summary', help='Refresh all summary (smry_) tables')

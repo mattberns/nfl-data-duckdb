@@ -1,24 +1,110 @@
-# NFL Analytics System
+# NFL Fantasy Football Analytics Database
 
-A comprehensive NFL data analytics system that extracts, stores, and analyzes NFL data using `nfl_data_py` and DuckDB. This system provides persistent storage for offline analysis and supports multiple fantasy football scoring systems.
+## Project Motivation
 
-## Features
+Fantasy football analytics requires easy access to comprehensive NFL data for player evaluation, matchup analysis, and performance prediction. While the `nfl_data_py` package provides excellent data access, it requires online connectivity and real-time API calls. This project creates a **persistent, easily queryable database** that consolidates NFL data and Expert Consensus Rankings (ECR) for offline fantasy football analysis.
 
-- ✅ Complete NFL data extraction from `nfl_data_py` package
-- ✅ Persistent DuckDB storage for offline analysis
-- ✅ Individual week and season refresh capabilities
-- ✅ Fantasy points calculation (STD, HALF PPR, FULL PPR)
-- ✅ Comprehensive CLI interface
-- ✅ Concurrent data extraction for performance
-- ✅ Data refresh tracking and logging
-- ✅ Flexible SQL querying capabilities
+The system enables analysts to:
+- Perform complex historical analysis without repeated API calls
+- Combine official NFL statistics with fantasy expert rankings
+- Run sophisticated queries for player evaluation and lineup optimization
+- Access consistent data structures for reproducible analysis
+
+## Technical Overview
+
+This system extracts NFL data using the `nfl_data_py` package and stores it in a high-performance DuckDB database. It combines official NFL statistics with Expert Consensus Rankings (ECR) data, providing a comprehensive foundation for fantasy football analytics.
+
+### Architecture
+
+```
+nfl_data_py API → Data Extraction → Schema Generation → DuckDB Storage → Analytics
+                ↓
+ECR Data Files → Raw Processing → Player Matching → Transformed Tables
+```
+
+### Key Components
+
+1. **NFL Data Extraction**: Pulls comprehensive NFL data including play-by-play, player stats, rosters, and injuries
+2. **ECR Integration**: Processes Expert Consensus Rankings and links them to official player IDs
+3. **Fantasy Points Calculation**: Supports multiple scoring systems (Standard, Half PPR, Full PPR)
+4. **Persistent Storage**: DuckDB provides fast analytical queries on large datasets
+5. **Data Quality Management**: Comprehensive validation and error handling
+
+### Data Tables
+
+**Core NFL Tables:**
+- `pbp_data` - Play-by-play data with detailed game information
+- `weekly_stats` - Weekly player statistics with fantasy points
+- `seasonal_stats` - Seasonal player aggregations
+- `rosters` - Weekly roster data with player-team assignments
+- `schedules` - Game schedules and results
+- `teams` - Team information and metadata
+- `players` - Player information and metadata
+- `injuries` - Injury reports and player status
+
+**ECR Tables:**
+- `raw_ecr_rankings` - Unprocessed Expert Consensus Rankings
+- `ecr_rankings` - ECR data linked to official player IDs
+
+**Summary Tables:**
+- `smry_season` - Aggregated seasonal analytics for downstream analysis
+
+## Command Line Interface
+
+### Core Data Management
+
+**Refresh NFL Season Data**
+```bash
+python main.py --database <*.duckdb> refresh-season <year>
+```
+Refreshes all NFL data for the specified season by replacing existing contents with current data from `nfl_data_py`.
+
+**Refresh Raw ECR Data**
+```bash
+python main.py --database <*.duckdb> refresh-raw-ecr
+```
+Extracts raw ECR data from the data folder and recreates the `raw_ecr_rankings` table.
+
+**Transform ECR Data**
+```bash
+python main.py --database <*.duckdb> refresh-transformed-ecr
+```
+Updates the `ecr_rankings` table to include links to the `nfl_data_py` `player_id` field, enabling joins between ECR rankings and official statistics.
+
+**Refresh Summary Tables**
+```bash
+python main.py --database <*.duckdb> refresh-summary --run-tests
+```
+Updates the `smry_` tables used for downstream analyses and optionally runs validation tests.
+
+### Additional Commands
+
+**Extract Multiple Seasons**
+```bash
+python main.py --database <*.duckdb> extract 2022 2023 2024
+```
+
+**Query Data**
+```bash
+python main.py --database <*.duckdb> query --sql "SELECT * FROM weekly_stats WHERE season = 2024 LIMIT 10"
+```
+
+**Database Validation**
+```bash
+python main.py --database <*.duckdb> validate
+```
+
+**Show Schema**
+```bash
+python main.py --database <*.duckdb> schema
+```
 
 ## Installation
 
 1. **Clone the repository:**
    ```bash
-   git clone <repository-url>
-   cd nfl-analytics
+   git clone https://github.com/mattberns/nfl-data-duckdb
+   cd nfl-data-duckdb
    ```
 
 2. **Create and activate virtual environment:**
@@ -30,323 +116,102 @@ A comprehensive NFL data analytics system that extracts, stores, and analyzes NF
 3. **Install dependencies:**
    ```bash
    pip install -r requirements.txt
-   ```
-
-4. **Install the package:**
-   ```bash
    pip install -e .
    ```
 
 ## Quick Start
 
-### 1. Extract NFL Data
+1. **Extract NFL data for analysis:**
+   ```bash
+   python main.py --database nfl_analytics.duckdb extract 2023 2024
+   ```
 
-Extract all available NFL data for specific seasons:
+2. **Add ECR rankings:**
+   ```bash
+   python main.py --database nfl_analytics.duckdb refresh-raw-ecr
+   python main.py --database nfl_analytics.duckdb refresh-transformed-ecr
+   ```
 
-```bash
-python main.py extract 2023 2024 --database nfl_analytics.duckdb
-```
+3. **Generate summary tables:**
+   ```bash
+   python main.py --database nfl_analytics.duckdb refresh-summary --run-tests
+   ```
 
-This will extract:
-- Play-by-play data
-- Weekly player statistics
-- Seasonal player statistics
-- Team schedules
-- Player information
-- Team information
-- Roster data
-- Injury reports
-
-### 2. Query the Data
-
-Execute SQL queries against the database:
-
-```bash
-# Get top 10 fantasy performers in 2023
-python main.py query --sql "
-SELECT player_name, position, team, fantasy_points_std, fantasy_points_full_ppr
-FROM weekly_stats 
-WHERE season = 2023 
-ORDER BY fantasy_points_std DESC 
-LIMIT 10
-" --database nfl_analytics.duckdb
-```
-
-### 3. Show Database Statistics
-
-Check what data is available:
-
-```bash
-python main.py stats --database nfl_analytics.duckdb
-```
-
-## Data Tables
-
-The system creates the following tables in DuckDB:
-
-### Core Tables
-
-- **`pbp_data`**: Play-by-play data with detailed game information
-- **`weekly_stats`**: Weekly player statistics with fantasy points
-- **`seasonal_stats`**: Seasonal player statistics with fantasy points
-- **`schedules`**: Game schedules and results
-- **`teams`**: Team information and metadata
-- **`players`**: Player information and metadata
-- **`rosters`**: Weekly roster data
-- **`injuries`**: Injury reports and player status
-
-### System Tables
-
-- **`data_refresh_log`**: Tracks data refresh operations
+4. **Query combined data:**
+   ```bash
+   python main.py --database nfl_analytics.duckdb query --sql "
+   SELECT 
+       w.player_name,
+       w.position,
+       w.team,
+       w.fantasy_points_ppr,
+       e.overall_rank as ecr_rank
+   FROM weekly_stats w
+   LEFT JOIN ecr_rankings e ON w.player_id = e.player_id 
+       AND w.season = e.year 
+       AND w.week = e.week
+   WHERE w.season = 2024 AND w.week = 1
+   ORDER BY w.fantasy_points_ppr DESC
+   LIMIT 20
+   "
+   ```
 
 ## Fantasy Points Calculation
 
-The system calculates fantasy points using three scoring systems:
+The system calculates fantasy points using three standard scoring systems:
 
-### Standard (STD)
+**Standard (STD)**
 - Passing: 1 point per 25 yards, 4 points per TD, -2 per INT
 - Rushing: 1 point per 10 yards, 6 points per TD
 - Receiving: 1 point per 10 yards, 6 points per TD, 0 points per reception
 - Fumbles: -2 points per fumble lost
 
-### Half PPR
+**Half PPR**
 - Same as Standard + 0.5 points per reception
 
-### Full PPR
+**Full PPR**
 - Same as Standard + 1 point per reception
 
-## CLI Commands
+## Data Quality and Performance
 
-### Extract Data
+### Data Quality Features
+- Comprehensive validation of extracted data
+- NULL percentage analysis for key columns
+- Duplicate detection and removal
+- Data type validation and conversion
+- Refresh operation logging
 
-```bash
-# Extract data for multiple seasons
-python main.py extract 2020 2021 2022 2023 2024
-
-# Extract with custom database location
-python main.py extract 2023 --database /path/to/custom.duckdb
-
-# Extract with more concurrent workers
-python main.py extract 2023 --workers 8
-```
-
-### Refresh Data
-
-```bash
-# Refresh all data for a season
-python main.py refresh-season 2024
-
-# Refresh specific data types for a season
-python main.py refresh-season 2024 --data-types weekly_stats seasonal_stats
-
-# Refresh a specific week
-python main.py refresh-week 2024 5
-```
-
-### Query Data
-
-```bash
-# Execute SQL query
-python main.py query --sql "SELECT * FROM teams"
-
-# Execute SQL from file
-python main.py query --file query.sql
-
-# Save results to CSV
-python main.py query --sql "SELECT * FROM weekly_stats WHERE season = 2023" --output results.csv
-
-# Save results to Parquet
-python main.py query --sql "SELECT * FROM weekly_stats WHERE season = 2023" --output results.parquet
-```
-
-## Usage Examples
-
-### Python API Usage
-
-```python
-from nfl_analytics import DatabaseManager, NFLDataExtractor, FantasyPointsCalculator
-
-# Initialize database
-with DatabaseManager('nfl_analytics.duckdb') as db:
-    # Extract data
-    extractor = NFLDataExtractor(db)
-    results = extractor.extract_all_data([2023, 2024])
-    
-    # Query data
-    top_qbs = db.query("""
-        SELECT player_name, team, fantasy_points_std
-        FROM weekly_stats
-        WHERE position = 'QB' AND season = 2023
-        ORDER BY fantasy_points_std DESC
-        LIMIT 10
-    """)
-    
-    # Calculate custom fantasy points
-    fantasy_calc = FantasyPointsCalculator()
-    player_stats = {
-        'passing_yards': 300,
-        'passing_tds': 2,
-        'rushing_yards': 50,
-        'rushing_tds': 1
-    }
-    points = fantasy_calc.calculate_player_fantasy_points(player_stats, 'std')
-```
-
-### Common SQL Queries
-
-#### Top Fantasy Performers by Position
-
-```sql
-SELECT 
-    player_name, 
-    position, 
-    team, 
-    AVG(fantasy_points_std) as avg_fantasy_points
-FROM weekly_stats
-WHERE season = 2023 AND position = 'RB'
-GROUP BY player_name, position, team
-HAVING COUNT(*) >= 10  -- At least 10 games
-ORDER BY avg_fantasy_points DESC
-LIMIT 20;
-```
-
-#### Best Matchups by Team Defense
-
-```sql
-SELECT 
-    w.opponent_team as defense,
-    w.position,
-    AVG(w.fantasy_points_std) as avg_points_allowed
-FROM weekly_stats w
-WHERE w.season = 2023 AND w.position IN ('QB', 'RB', 'WR', 'TE')
-GROUP BY w.opponent_team, w.position
-ORDER BY w.opponent_team, avg_points_allowed DESC;
-```
-
-#### Player Performance Trends
-
-```sql
-SELECT 
-    player_name,
-    week,
-    fantasy_points_std,
-    LAG(fantasy_points_std) OVER (PARTITION BY player_name ORDER BY week) as prev_week_points,
-    fantasy_points_std - LAG(fantasy_points_std) OVER (PARTITION BY player_name ORDER BY week) as week_change
-FROM weekly_stats
-WHERE season = 2023 AND player_name = 'Josh Allen'
-ORDER BY week;
-```
-
-## Data Refresh Strategy
-
-### Full Season Refresh
-- Run at the end of each season
-- Updates all data types for the season
-- Useful for final statistics and corrections
-
-### Weekly Refresh
-- Run after each game week
-- Updates only the current week's data
-- Fast and efficient for real-time analysis
-
-### Incremental Updates
-- The system tracks what data has been refreshed
-- Only updates changed data when possible
-- Logs all refresh operations for audit trail
-
-## Performance Considerations
-
-### Concurrent Extraction
-- Default: 4 concurrent workers
-- Increase for better performance (if API allows)
-- Monitor API rate limits
-
-### Database Size
-- Full season data: ~50MB per season
-- Multiple seasons: Scale accordingly
-- DuckDB handles large datasets efficiently
-
-### Memory Usage
-- Large datasets loaded into memory during processing
-- Monitor system memory during extraction
-- Consider processing seasons individually if needed
+### Performance Characteristics
+- **Database Size**: ~50MB per NFL season
+- **Query Performance**: Sub-second response times for most analytics queries
+- **Memory Usage**: Efficient processing of large datasets
+- **Concurrent Processing**: Configurable workers for data extraction
 
 ## Troubleshooting
 
-### Common Issues
+**Common Issues:**
 
-1. **API Rate Limiting**
-   - Reduce concurrent workers
-   - Add delays between requests
-   - Monitor nfl_data_py logs
+1. **API Rate Limiting**: Reduce concurrent workers if experiencing timeouts
+2. **Memory Issues**: Process fewer seasons at once for large extractions
+3. **Missing ECR Data**: Ensure ECR files are present in the data directory before running refresh commands
 
-2. **Memory Issues**
-   - Process fewer seasons at once
-   - Reduce concurrent workers
-   - Monitor system resources
-
-3. **Database Corruption**
-   - DuckDB files are resilient
-   - Backup database before major operations
-   - Use database repair tools if needed
-
-### Logging
-
-All operations are logged to `nfl_analytics.log`:
-
+**Logging**: All operations are logged to `nfl_analytics.log` for debugging:
 ```bash
-# View recent logs
 tail -f nfl_analytics.log
-
-# Search for errors
-grep ERROR nfl_analytics.log
 ```
 
-## Development
+## Acknowledgments
 
-### Project Structure
+This project builds upon excellent open-source tools and data sources:
 
-```
-nfl_analytics/
-├── __init__.py
-├── database/
-│   ├── __init__.py
-│   └── manager.py          # Database operations
-├── extractors/
-│   ├── __init__.py
-│   └── data_extractor.py   # Data extraction logic
-├── models/
-│   ├── __init__.py
-│   └── fantasy_points.py   # Fantasy points calculation
-└── utils/
-    └── __init__.py
-```
+- **[nfl_data_py](https://github.com/cooperdff/nfl_data_py)**: Comprehensive NFL data package that provides the foundation for all official statistics
+- **[DuckDB](https://duckdb.org/)**: High-performance analytical database that enables fast querying of large datasets
+- **NFL Community**: For providing comprehensive, well-structured data that makes projects like this possible
+- **Fantasy Football Community**: For establishing standard scoring systems and consensus ranking methodologies
 
-### Testing
+## License
 
-```bash
-# Run basic system test
-python -c "
-from nfl_analytics import DatabaseManager
-with DatabaseManager('test.duckdb') as db:
-    print('Database connection successful')
-"
-
-# Test fantasy points calculation
-python -c "
-from nfl_analytics import FantasyPointsCalculator
-calc = FantasyPointsCalculator()
-points = calc.calculate_player_fantasy_points({'passing_yards': 300, 'passing_tds': 2}, 'std')
-print(f'Fantasy points: {points}')
-"
-```
-
-### Adding New Features
-
-1. **New Data Sources**: Add extraction methods to `NFLDataExtractor`
-2. **Custom Scoring**: Extend `FantasyPointsCalculator` with new systems
-3. **New Queries**: Add query templates to documentation
-4. **New Tables**: Update database schema in `DatabaseManager`
+This project is licensed under the MIT License. See LICENSE file for details.
 
 ## Contributing
 
@@ -356,20 +221,4 @@ print(f'Fantasy points: {points}')
 4. Update documentation
 5. Submit a pull request
 
-## License
-
-This project is licensed under the MIT License. See LICENSE file for details.
-
-## Support
-
-For issues and questions:
-1. Check the troubleshooting section
-2. Review the logs for error details
-3. Open an issue with detailed information
-4. Include system information and error messages
-
-## Acknowledgments
-
-- **nfl_data_py**: Excellent NFL data package
-- **DuckDB**: High-performance analytical database
-- **NFL community**: For providing comprehensive data
+For issues and questions, please open a GitHub issue with detailed information including system specs and error messages.
